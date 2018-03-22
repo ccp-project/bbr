@@ -5,7 +5,7 @@ authors = ["Akshay Narayan <akshayn@mit.edu>"]
 
 [dependencies]
 clap="2.29"
-portus = { path = ".." }
+portus = { git = "ssh://github.mit.edu/nebula/portus" }
 slog = "2"
 slog-async = "2"
 slog-term = "2"
