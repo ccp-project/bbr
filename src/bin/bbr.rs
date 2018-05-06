@@ -8,12 +8,12 @@ extern crate ccp_bbr;
 extern crate portus;
 
 use ccp_bbr::Bbr;
-use portus::ipc::{Backend, ListenMode};
+use portus::ipc::{BackendBuilder, Blocking};
 
 fn make_args() -> Result<(ccp_bbr::BbrConfig, String), String> {
     let probe_rtt_interval_default = format!("{}", ccp_bbr::PROBE_RTT_INTERVAL_SECONDS);
     let matches = clap::App::new("CCP BBR")
-        .version("0.1.0")
+        .version("0.2.0")
         .author("Akshay Narayan <akshayn@mit.edu>")
         .about("Implementation of BBR Congestion Control")
         .arg(Arg::with_name("ipc")
@@ -62,30 +62,30 @@ fn main() {
     match ipc.as_str() {
         "unix" => {
             use portus::ipc::unix::Socket;
-            let b = Socket::new("in", "out")
-                .map(|sk| Backend::new(sk, ListenMode::Blocking))
+            let b = Socket::<Blocking>::new("in", "out")
+                .map(|sk| BackendBuilder{sock: sk})
                 .expect("ipc initialization");
-            portus::start::<_, Bbr<_>>(
+            portus::run::<_, Bbr<_>>(
                 b,
                 &portus::Config {
                     logger: Some(log),
                     config: cfg,
                 }
-            );
+            ).unwrap();
         }
         #[cfg(all(target_os = "linux"))]
         "netlink" => {
             use portus::ipc::netlink::Socket;
-            let b = Socket::new()
-                .map(|sk| Backend::new(sk, ListenMode::Blocking))
+            let b = Socket::<Blocking>::new()
+                .map(|sk| BackendBuilder{sock: sk})
                 .expect("ipc initialization");
-            portus::start::<_, Bbr<_>>(
+            portus::run::<_, Bbr<_>>(
                 b,
                 &portus::Config {
                     logger: Some(log),
                     config: cfg,
                 }
-            );
+            ).unwrap();
         }
         _ => unreachable!(),
     }
