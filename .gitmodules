@@ -1,0 +1,3 @@
+[submodule "portus"]
+	path = portus
+	url = git@github.com:ccp-project/portus.git
