@@ -298,12 +298,16 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                 }
 
                 let (loss, minrtt, rate, state) = fields.unwrap();
-
+                
+                // reset probe rtt counter and update cwnd cap
                 if minrtt < self.min_rtt_us {
                     // datapath automatically  uses minrtt for when condition (non volatile), 
                     // this isn't reset, so no need to install again
                     self.min_rtt_us = minrtt;
                     self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
+                    if !(self.init) { // probe bw program is installed
+                        self.install_update(&[("cwndCap", (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32)]); // reinstall cwnd cap value
+                    }
                     self.logger.as_ref().map(|log| {
                         info!(log, "replacing min rtt!";
                               "min_rtt (us)" => self.min_rtt_us,
