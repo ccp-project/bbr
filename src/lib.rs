@@ -107,7 +107,7 @@ impl<T: Ipc> Bbr<T> {
                 (def
                     (Report 
                         (volatile loss 0)
-                        (volatile minrtt +infinity)
+                        (minrtt +infinity)
                         (volatile rate 0) 
                         (pulseState 0)
                     )
@@ -164,7 +164,6 @@ impl<T: Ipc> Bbr<T> {
                         (pulseState 0)
                     )
                     (pulseState 0)
-                    (minrtt +infinity)
                     (cwndCap 0)
                     (bottleRate 0)
                     (threeFourthsRate 0)
@@ -174,21 +173,20 @@ impl<T: Ipc> Bbr<T> {
                     (:= Report.loss (+ Report.loss Ack.lost_pkts_sample))
                     (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
                     (:= Report.pulseState pulseState)
-                    (:= minrtt (min minrtt Flow.rtt_sample_us))
                     (:= Report.rate (max Report.rate (min Flow.rate_outgoing Flow.rate_incoming)))
                     (fallthrough)
                 )
-                (when (&& (> Micros minrtt) (== pulseState 0))
+                (when (&& (> Micros Report.minrtt) (== pulseState 0))
                     (:= Rate threeFourthsRate)
                     (:= pulseState 1)
                     (report)
                 )
-                (when (&& (> Micros (* minrtt 2)) (== pulseState 1))
-                    (:= Rate rate)
-                    (:= pulseState 0)
+                (when (&& (> Micros (* Report.minrtt 2)) (== pulseState 1))
+                    (:= Rate bottleRate)
+                    (:= pulseState 2)
                     (report)
                 )
-                (when (&& (> Micros (* minrtt 8)) (== pulseState 2))
+                (when (&& (> Micros (* Report.minrtt 8)) (== pulseState 2))
                     (:= pulseState 0)
                     (:= Cwnd cwndCap)
                     (:= Rate fiveFourthsRate)
@@ -196,7 +194,7 @@ impl<T: Ipc> Bbr<T> {
                     (report)
                 )
             "; 
-        self.control_channel.install(program, Some(&[("minrtt", min_rtt), 
+        self.control_channel.install(program, Some(&[("Report.minrtt", min_rtt),
                                                      ("cwndCap", cwnd_cap),
                                                      ("bottleRate", rate),
                                                      ("threeFourthsRate", three_fourths_rate),
@@ -212,6 +210,11 @@ impl<T: Ipc> Bbr<T> {
     }
 
     fn install_probe_rtt(&self) -> Scope {
+        self.logger.as_ref().map(|log| {
+            info!(log, "installing probe rtt!";
+                "cwnd" => 4 * self.mss,
+            );
+        });
         self.install_update(&[("Cwnd", (4 * self.mss) as u32)]);
         let program =
             b"
