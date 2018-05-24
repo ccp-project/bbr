@@ -50,7 +50,7 @@ class BBR(portus.AlgBase):
 				    (:= Report.pulseState 5)
 				    (fallthrough)
 				)
-				(when (> Micros Report.minrtt)
+				(when (> Micros Report.minrtt))
 				    (report)
 			""")
 
@@ -121,10 +121,11 @@ class BBR(portus.AlgBase):
 		sys.stdout.write("! installed program\n")
 
 
-	def on_report(self, report):
+	def on_report(self, r):
+                sys.stdout.write("on_report()\n")
 		if self.curr_mode == BBR.PROBE_BW or self.curr_mode == BBR.STARTUP:
-			loss, minrtt, rate, state = report.loss, report.minrtt, report.rate, report.pulseState
-			sys.stdout.write("[probe_bw] loss={} min_rtt={} rate={} setRate={}, state={}".format(loss, minrtt, rate / 125000.0, self.bottle_rate / 125000.0, state))
+			loss, minrtt, rate, state = r.loss, r.minrtt, r.rate, r.pulseState
+			sys.stdout.write("[probe_bw] loss={} min_rtt={} rate={} setRate={}, state={}\n".format(loss, minrtt, rate / 125000.0, self.bottle_rate / 125000.0, state))
 
 			if minrtt < self.min_rtt_us:
 				self.min_rtt_us = minrtt
@@ -144,8 +145,8 @@ class BBR(portus.AlgBase):
 				self.set_mode(BBR.PROBE_BW)
 
 		elif self.curr_mode == BBR.PROBE_RTT:
-			self.min_rtt_us = report.minrtt
-			sys.stdout.write("[probe_rtt] minrtt={}".format())
+			self.min_rtt_us = r.minrtt
+			sys.stdout.write("[probe_rtt] minrtt={}\n".format())
 
 			if time.time() > self.bottle_rate_timeout:
 				self.bottle_rate_timeout = time.time() + PROBE_RTT_INTERVAL
