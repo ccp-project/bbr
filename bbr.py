@@ -22,9 +22,9 @@ class BBR(portus.AlgBase):
 
 	def update_rate(self):
 		self.datapath.update_fields([
-			("bottleRate", int(self.bottle_rate))
-			("threeFourthsRate", int(self.bottle_rate * 0.75))
-			("fiveFourthsRate", int(self.bottle_rate * 1.25))
+			("bottleRate", int(self.bottle_rate)),
+			("threeFourthsRate", int(self.bottle_rate * 0.75)),
+			("fiveFourthsRate", int(self.bottle_rate * 1.25)),
 			("cwndCap", int(self.bottle_rate * 2 * (self.min_rtt_us / 1e6)))
 		])
 		
@@ -50,8 +50,9 @@ class BBR(portus.AlgBase):
 				    (:= Report.pulseState 5)
 				    (fallthrough)
 				)
-				(when (> Micros Report.minrtt))
+				(when (> Micros Report.minrtt)
 				    (report)
+                                )
 			""")
 
 		elif self.curr_mode == BBR.PROBE_RTT:
@@ -76,8 +77,8 @@ class BBR(portus.AlgBase):
 			self.datapath.install("""
                 (def
                     (Report 
-                        (volatile loss 0)
                         (volatile minrtt +infinity)
+                        (volatile loss 0)
                         (volatile rate 0) 
                         (pulseState 0)
                     )
@@ -116,7 +117,7 @@ class BBR(portus.AlgBase):
 					("cwndCap", int(self.bottle_rate * 2 * (self.min_rtt_us / 1e6))),
 					("bottleRate", int(self.bottle_rate)),
 					("threeFourthsRate", int(self.bottle_rate * 0.75)),
-					("fiveFouthsRate", int(self.bottle_rate * 1.25))
+					("fiveFourthsRate", int(self.bottle_rate * 1.25))
 			])
 		sys.stdout.write("! installed program\n")
 
@@ -137,7 +138,7 @@ class BBR(portus.AlgBase):
 
 			if self.bottle_rate < rate:
 				self.bottle_rate = rate
-				self.bottle_rate_timeout = time.time() + PROBE_RTT_INTERVAL
+				self.bottle_rate_timeout = time.time() + BBR.PROBE_RTT_INTERVAL
 				if self.curr_mode != BBR.STARTUP:
 					self.update_rate()
 
@@ -146,13 +147,13 @@ class BBR(portus.AlgBase):
 
 		elif self.curr_mode == BBR.PROBE_RTT:
 			self.min_rtt_us = r.minrtt
-			sys.stdout.write("[probe_rtt] minrtt={}\n".format())
+			sys.stdout.write("[probe_rtt] minrtt={}\n".format(self.min_rtt_us))
 
 			if time.time() > self.bottle_rate_timeout:
-				self.bottle_rate_timeout = time.time() + PROBE_RTT_INTERVAL
+				self.bottle_rate_timeout = time.time() + BBR.PROBE_RTT_INTERVAL
 				self.bottle_rate = 125000
 
 			self.set_mode(BBR.PROBE_BW)
 
 
-portus.connect("netlink", BBR, debug=True, blocking=True)
+portus.connect("netlink", BBR, debug=False, blocking=True)
