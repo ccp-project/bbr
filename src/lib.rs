@@ -62,6 +62,7 @@ pub struct Bbr<T: Ipc> {
     curr_mode: BbrMode,
     mss: u32,
     init: bool,
+    start: time::Timespec,
 }
 
 enum BbrMode {
@@ -133,6 +134,14 @@ impl<T: Ipc> Bbr<T> {
         let five_fourths_rate = (self.bottle_rate * 1.25) as u32;
         let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32;
         self.install_update(&[("bottleRate", rate), ("threeFourthsRate", three_fourths_rate), ("fiveFourthsRate", five_fourths_rate), ("cwndCap", cwnd_cap)]);
+        self.logger.as_ref().map(|log| {
+            info!(log, "installed update rate!";
+                "cwnd" => cwnd_cap,
+                "Ratex1.25" => five_fourths_rate,
+                "Ratex0.75" => three_fourths_rate,
+                "bottle rate" => rate,
+            );
+        });
     }
 
     fn install_probe_bw(&self) -> Scope {
@@ -225,10 +234,7 @@ impl<T: Ipc> Bbr<T> {
                     (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
                     (fallthrough)
                 )
-                (when (> Micros 2000000)
-                    (report)
-                )
-                (when (< Flow.packets_in_flight 4)
+                (when (&& (> Micros 200000) (|| (< Flow.packets_in_flight 4) (== Flow.packets_in_flight 4)))
                     (report)
                 )
             ";
@@ -263,6 +269,7 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
             curr_mode: BbrMode::ProbeBw,
             mss: info.mss,
             init: true,
+            start: time::now().to_timespec(),
         };
         
         s.logger.as_ref().map(|log| {
@@ -276,17 +283,20 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
     fn on_report(&mut self, _sock_id: u32, m: Report) {
         match self.curr_mode {
             BbrMode::ProbeRtt => {
+				let elapsed2 =  time::now().to_timespec() - self.start;
                 self.min_rtt_us = self.get_probe_minrtt(&m);
-                if time::now().to_timespec() > self.bottle_rate_timeout {
+				self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
+                /*if time::now().to_timespec() > self.bottle_rate_timeout {
                     self.bottle_rate_timeout = time::now().to_timespec() + self.probe_rtt_interval;
                     self.bottle_rate = 125_000.0;
-                }
+                }*/
 
                 self.sc = self.install_probe_bw();
                 self.curr_mode = BbrMode::ProbeBw;
                 
                 self.logger.as_ref().map(|log| {
-                    debug!(log, "probe_rtt"; 
+                    debug!(log, "probe_rtt";
+						"since" => format!("{:?}.{:?}", elapsed2.num_seconds(), elapsed2.num_milliseconds() - elapsed2.num_seconds()*1000), 
                         "min_rtt (us)" => self.min_rtt_us,
                     );
                 });
@@ -298,7 +308,16 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                 }
 
                 let (loss, minrtt, rate, state) = fields.unwrap();
-                
+                let mut elapsed =  time::now().to_timespec() - self.start;
+                self.logger.as_ref().map(|log| {
+                    debug!(log, "top of probe_bw loop";
+						"since" => format!("{:?}.{:?}", elapsed.num_seconds(), elapsed.num_milliseconds() - elapsed.num_seconds()*1000),
+                        "rate (Mbps)" => rate / 125_000.0,
+                        "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
+						"timeout" => format!("timeout: {:?}.{:?}", (self.min_rtt_timeout - self.start).num_seconds(), (self.min_rtt_timeout - self.start).num_milliseconds() - (self.min_rtt_timeout - self.start).num_seconds() * 1000 ),
+                    );
+                });
+				elapsed = time::now().to_timespec() - self.start;
                 // reset probe rtt counter and update cwnd cap
                 if minrtt < self.min_rtt_us {
                     // datapath automatically  uses minrtt for when condition (non volatile), 
@@ -308,11 +327,6 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                     if !(self.init) { // probe bw program is installed
                         self.install_update(&[("cwndCap", (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32)]); // reinstall cwnd cap value
                     }
-                    self.logger.as_ref().map(|log| {
-                        info!(log, "replacing min rtt!";
-                              "min_rtt (us)" => self.min_rtt_us,
-                        );
-                    });
                 }
 
                 if time::now().to_timespec() > self.min_rtt_timeout {
@@ -327,6 +341,7 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                         info!(log, "installing probe rtt!";
                               "min_rtt (us)" => self.min_rtt_us,
                               "bottle rate" => self.bottle_rate,
+                        "state" => state,
                         );
                     });
                     self.sc = self.install_probe_rtt();
@@ -352,13 +367,17 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                     self.init = false;
                 }
 
+				elapsed =  time::now().to_timespec() - self.start;
+
                 self.logger.as_ref().map(|log| {
-                    debug!(log, "probe_bw"; 
+                    debug!(log, "probe_bw";
+                        "since" => format!("{:?}.{:?}", elapsed.num_seconds(), elapsed.num_milliseconds() - elapsed.num_seconds()*1000),
                         "loss" => loss,
                         "min_rtt (us)" => self.min_rtt_us,
                         "rate (Mbps)" => rate / 125_000.0,
-                        "setRate (Mbps)" => self.bottle_rate / 125_000.0,
+                        "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
                         "state" => state,
+						"timeout" => format!("timeout: {:?}.{:?}", (self.min_rtt_timeout - self.start).num_seconds(), (self.min_rtt_timeout - self.start).num_milliseconds() - (self.min_rtt_timeout - self.start).num_seconds() * 1000 ),
                     );
                 });
             }
