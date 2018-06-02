@@ -6,7 +6,6 @@ extern crate portus;
 use portus::{CongAlg, Config, Datapath, DatapathInfo, DatapathTrait, Report};
 use portus::ipc::Ipc;
 use portus::lang::Scope;
-use std::fmt;
 
 /// Linux source: `net/ipv4/tcp_bbr.c`
 ///
@@ -211,10 +210,26 @@ impl<T: Ipc> Bbr<T> {
     }
 
     fn get_probe_bw_fields(&mut self, m: &Report) -> Option<(u32, u32, f64, u32)> {
-        let rtt = m.get_field(&String::from("Report.minrtt"), &self.sc).map(|x| x as u32)?;
-        let loss = m.get_field(&String::from("Report.loss"), &self.sc).map(|x| x as u32)?;
-        let rate = m.get_field(&String::from("Report.rate"), &self.sc).map(|x| x as f64)?;
-        let state = m.get_field(&String::from("Report.pulseState"), &self.sc).map(|x| x as u32)?;
+        let rtt = match m.get_field(&String::from("Report.minrtt"), &self.sc).map(|x| x as u32) {
+            Ok(v) => v,
+            //Err(portus::Error::<portus::StaleProgramError>) => return None,
+            Err(e) => { eprintln!("error! get_fields: {:?}", e); return None }
+        };
+        let loss = match m.get_field(&String::from("Report.loss"), &self.sc).map(|x| x as u32) {
+            Ok(v) => v,
+            //Err(portus::Error::<portus::StaleProgramError>) => return None,
+            Err(e) => { eprintln!("error! get_fields: {:?}", e); return None }
+        };
+        let rate = match m.get_field(&String::from("Report.rate"), &self.sc).map(|x| x as f64) {
+            Ok(v) => v,
+            //Err(portus::Error::<portus::StaleProgramError>) => return None,
+            Err(e) => { eprintln!("error! get_fields: {:?}", e); return None }
+        };
+        let state = match m.get_field(&String::from("Report.pulseState"), &self.sc).map(|x| x as u32) { 
+            Ok(v) => v,
+            //Err(portus::Error::<portus::StaleProgramError>) => return None,
+            Err(e) => { eprintln!("error! get_fields: {:?}", e); return None }
+        };
         Some((loss, rtt, rate, state))
     }
 
@@ -317,7 +332,6 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
 						"timeout" => format!("timeout: {:?}.{:?}", (self.min_rtt_timeout - self.start).num_seconds(), (self.min_rtt_timeout - self.start).num_milliseconds() - (self.min_rtt_timeout - self.start).num_seconds() * 1000 ),
                     );
                 });
-				elapsed = time::now().to_timespec() - self.start;
                 // reset probe rtt counter and update cwnd cap
                 if minrtt < self.min_rtt_us {
                     // datapath automatically  uses minrtt for when condition (non volatile), 
