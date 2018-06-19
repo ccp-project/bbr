@@ -211,10 +211,18 @@ impl<T: Ipc> Bbr<T> {
     }
 
     fn get_probe_bw_fields(&mut self, m: &Report) -> Option<(u32, u32, f64, u32)> {
-        let rtt = m.get_field(&String::from("Report.minrtt"), &self.sc).map(|x| x as u32)?;
-        let loss = m.get_field(&String::from("Report.loss"), &self.sc).map(|x| x as u32)?;
-        let rate = m.get_field(&String::from("Report.rate"), &self.sc).map(|x| x as f64)?;
-        let state = m.get_field(&String::from("Report.pulseState"), &self.sc).map(|x| x as u32)?;
+       let rtt = m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
+            "expected minrtt field in returned measurement",
+        ) as u32;
+        let loss = m.get_field(&String::from("Report.loss"), &self.sc).expect(
+            "expected loss field in returned measurement",
+        ) as u32;
+        let rate = m.get_field(&String::from("Report.rate"), &self.sc).expect(
+            "expected rate field in returned measurement",
+        ) as f64;
+        let state = m.get_field(&String::from("Report.pulseState"), &self.sc).expect(
+            "expected state field in returned measurement",
+        ) as u32;
         Some((loss, rtt, rate, state))
     }
 
@@ -281,6 +289,10 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
     }
 
     fn on_report(&mut self, _sock_id: u32, m: Report) {
+        // if report is not for the current scope, please return
+        if self.sc.program_uid != m.program_uid {
+            return
+        }
         match self.curr_mode {
             BbrMode::ProbeRtt => {
 				let elapsed2 =  time::now().to_timespec() - self.start;
