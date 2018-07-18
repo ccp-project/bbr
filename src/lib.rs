@@ -97,11 +97,6 @@ impl<T: Ipc> Bbr<T> {
 
     // used on startup
     fn install_init_program(&self, cwnd: u32) -> Scope {
-        self.logger.as_ref().map(|log| {
-            info!(log, "installing init cwnd for init program!";
-                "cwnd" => cwnd
-            );
-        });
         self.install_update(&[("Cwnd", cwnd)]);
         let program =
             b"
@@ -135,11 +130,11 @@ impl<T: Ipc> Bbr<T> {
         let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32;
         self.install_update(&[("bottleRate", rate), ("threeFourthsRate", three_fourths_rate), ("fiveFourthsRate", five_fourths_rate), ("cwndCap", cwnd_cap)]);
         self.logger.as_ref().map(|log| {
-            info!(log, "installed update rate!";
+            info!(log, "PROBE_BW: updating rate";
                 "cwnd" => cwnd_cap,
-                "Ratex1.25" => five_fourths_rate,
-                "Ratex0.75" => three_fourths_rate,
-                "bottle rate" => rate,
+                "Rate (3/4)" => three_fourths_rate as f64 / 125_000.0,
+                "bottle rate" => self.bottle_rate / 125_000.0,
+                "Rate (5/4)" => five_fourths_rate as f64 / 125_000.0,
             );
         });
     }
@@ -153,12 +148,12 @@ impl<T: Ipc> Bbr<T> {
         let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32;
         
         self.logger.as_ref().map(|log| {
-            info!(log, "installing probe bw!";
+            info!(log, "switching to PROBE_BW";
                 "cwnd" => cwnd_cap,
-                "Ratex1.25" => five_fourths_rate,
-                "Ratex0.75" => three_fourths_rate,
-                "bottle rate" => rate,
-                "control rtt" => min_rtt,
+                "Rate (3/4)" => three_fourths_rate as f64 / 125_000.0,
+                "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
+                "Rate (5/4)" => five_fourths_rate as f64 / 125_000.0,
+                "min rtt (us)" => min_rtt,
             );
         });
 
@@ -227,11 +222,6 @@ impl<T: Ipc> Bbr<T> {
     }
 
     fn install_probe_rtt(&self) -> Scope {
-        self.logger.as_ref().map(|log| {
-            info!(log, "installing probe rtt!";
-                "cwnd" => 4 * self.mss,
-            );
-        });
         self.install_update(&[("Cwnd", (4 * self.mss) as u32)]);
         let program =
             b"
@@ -280,10 +270,6 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
             start: time::now().to_timespec(),
         };
         
-        s.logger.as_ref().map(|log| {
-            debug!(log, "starting bbr flow";);
-        });
-
         s.sc = s.install_init_program(info.init_cwnd);
         s
     }
@@ -298,17 +284,12 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
 				let elapsed2 =  time::now().to_timespec() - self.start;
                 self.min_rtt_us = self.get_probe_minrtt(&m);
 				self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
-                /*if time::now().to_timespec() > self.bottle_rate_timeout {
-                    self.bottle_rate_timeout = time::now().to_timespec() + self.probe_rtt_interval;
-                    self.bottle_rate = 125_000.0;
-                }*/
 
                 self.sc = self.install_probe_bw();
                 self.curr_mode = BbrMode::ProbeBw;
                 
                 self.logger.as_ref().map(|log| {
-                    debug!(log, "probe_rtt";
-						"since" => format!("{:?}.{:?}", elapsed2.num_seconds(), elapsed2.num_milliseconds() - elapsed2.num_seconds()*1000), 
+                    debug!(log, "PROBE_RTT";
                         "min_rtt (us)" => self.min_rtt_us,
                     );
                 });
@@ -322,11 +303,10 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                 let (loss, minrtt, rate, state) = fields.unwrap();
                 let mut elapsed =  time::now().to_timespec() - self.start;
                 self.logger.as_ref().map(|log| {
-                    debug!(log, "top of probe_bw loop";
-						"since" => format!("{:?}.{:?}", elapsed.num_seconds(), elapsed.num_milliseconds() - elapsed.num_seconds()*1000),
+                    debug!(log, "probe_bw";
+						"elapsed" => format!("{:?}.{:?}", elapsed.num_seconds(), elapsed.num_milliseconds() - elapsed.num_seconds()*1000),
                         "rate (Mbps)" => rate / 125_000.0,
                         "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
-						"timeout" => format!("timeout: {:?}.{:?}", (self.min_rtt_timeout - self.start).num_seconds(), (self.min_rtt_timeout - self.start).num_milliseconds() - (self.min_rtt_timeout - self.start).num_seconds() * 1000 ),
                     );
                 });
 				elapsed = time::now().to_timespec() - self.start;
@@ -342,18 +322,12 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                 }
 
                 if time::now().to_timespec() > self.min_rtt_timeout {
-                    self.logger.as_ref().map(|log| {
-                        info!(log, "reached min rtt timeout to go to probe rtt phase!";
-                              "min_rtt (us)" => self.min_rtt_us,
-                        );
-                    });
                     self.curr_mode = BbrMode::ProbeRtt;
                     self.min_rtt_us = 0x3fff_ffff;
                     self.logger.as_ref().map(|log| {
-                        info!(log, "installing probe rtt!";
+                        info!(log, "switching to PROBE_RTT";
                               "min_rtt (us)" => self.min_rtt_us,
-                              "bottle rate" => self.bottle_rate,
-                        "state" => state,
+                              "bottle rate" => self.bottle_rate / 125_000.0,
                         );
                     });
                     self.sc = self.install_probe_rtt();
@@ -372,7 +346,7 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
 
                 if self.init {
                     self.logger.as_ref().map(|log| {
-                        info!(log, "about to try installing probe bw";
+                        info!(log, "new_flow";
                         );
                     });
                     self.sc = self.install_probe_bw();
@@ -380,18 +354,6 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                 }
 
 				elapsed =  time::now().to_timespec() - self.start;
-
-                self.logger.as_ref().map(|log| {
-                    debug!(log, "probe_bw";
-                        "since" => format!("{:?}.{:?}", elapsed.num_seconds(), elapsed.num_milliseconds() - elapsed.num_seconds()*1000),
-                        "loss" => loss,
-                        "min_rtt (us)" => self.min_rtt_us,
-                        "rate (Mbps)" => rate / 125_000.0,
-                        "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
-                        "state" => state,
-						"timeout" => format!("timeout: {:?}.{:?}", (self.min_rtt_timeout - self.start).num_seconds(), (self.min_rtt_timeout - self.start).num_milliseconds() - (self.min_rtt_timeout - self.start).num_seconds() * 1000 ),
-                    );
-                });
             }
         }
     }
