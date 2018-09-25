@@ -1,11 +1,11 @@
 //! Linux source: `net/ipv4/tcp_bbr.c`
 //!
 //! model of the network path:
-//! ```
+//! ```no-run
 //!    bottleneck_bandwidth = windowed_max(delivered / elapsed, 10 round trips)
 //!    min_rtt = windowed_min(rtt, 10 seconds)
 //! ```
-//! ```
+//! ```no-run
 //! pacing_rate = pacing_gain * bottleneck_bandwidth
 //! cwnd = max(cwnd_gain * bottleneck_bandwidth * min_rtt, 4)
 //! ```
@@ -44,11 +44,14 @@
 #[macro_use]
 extern crate slog;
 extern crate time;
+extern crate fnv;
 extern crate portus;
 
-use portus::{CongAlg, Config, Datapath, DatapathInfo, DatapathTrait, Report};
+use portus::{CongAlg, Datapath, DatapathInfo, DatapathTrait, Report};
 use portus::ipc::Ipc;
 use portus::lang::Scope;
+
+use fnv::FnvHashMap;
 
 pub struct Bbr<T: Ipc> {
     control_channel: Datapath<T>,
@@ -74,14 +77,9 @@ pub const PROBE_RTT_INTERVAL_SECONDS: i64 = 10;
 
 #[derive(Clone)]
 pub struct BbrConfig {
+    pub logger: Option<slog::Logger>,
     pub probe_rtt_interval: time::Duration,
     // TODO make more things configurable
-}
-
-impl Default for BbrConfig {
-    fn default() -> Self {
-        BbrConfig { probe_rtt_interval: time::Duration::seconds(PROBE_RTT_INTERVAL_SECONDS) }
-    }
 }
 
 impl<T: Ipc> Bbr<T> {
@@ -93,33 +91,6 @@ impl<T: Ipc> Bbr<T> {
                 );
             });
         }
-    }
-
-    // used on startup
-    fn install_init_program(&self, cwnd: u32) -> Scope {
-        self.install_update(&[("Cwnd", cwnd)]);
-        let program =
-            b"
-                (def
-                    (Report 
-                        (volatile loss 0)
-                        (minrtt +infinity)
-                        (volatile rate 0) 
-                        (pulseState 0)
-                    )
-                )
-                (when true
-                    (:= Report.loss (+ Report.loss Ack.lost_pkts_sample))
-                    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
-                    (:= Report.rate (max Report.rate (min Flow.rate_outgoing Flow.rate_incoming)))
-                    (:= Report.pulseState 5)
-                    (fallthrough)
-                )
-                (when (> Micros Report.minrtt)
-                    (report)
-                )";
-
-        self.control_channel.install(program, None).unwrap()
     }
 
     // replaces the variables in the probe bw program if the bottle rate or min_rtt changes
@@ -139,7 +110,7 @@ impl<T: Ipc> Bbr<T> {
         });
     }
 
-    fn install_probe_bw(&self) -> Scope {
+    fn install_probe_bw(&mut self) -> Scope {
         // first, install the rate and cwnd for state 0 for state 0
         let min_rtt = self.min_rtt_us as u32;
         let three_fourths_rate = (self.bottle_rate * 0.75) as u32;
@@ -158,8 +129,78 @@ impl<T: Ipc> Bbr<T> {
         });
 
         self.install_update(&[("Cwnd", cwnd_cap), ("Rate", five_fourths_rate)]);
-        let program =
-            b"
+        self.control_channel.set_program("probe_bw", Some(&[("Report.minrtt", min_rtt),
+                                                     ("cwndCap", cwnd_cap),
+                                                     ("bottleRate", rate),
+                                                     ("threeFourthsRate", three_fourths_rate),
+                                                     ("fiveFourthsRate", five_fourths_rate)][..])).unwrap()
+    }
+
+    fn get_probe_bw_fields(&mut self, m: &Report) -> Option<(u32, u32, f64, u32)> {
+       let rtt = m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
+            "expected minrtt field in returned measurement",
+        ) as u32;
+        let loss = m.get_field(&String::from("Report.loss"), &self.sc).expect(
+            "expected loss field in returned measurement",
+        ) as u32;
+        let rate = m.get_field(&String::from("Report.rate"), &self.sc).expect(
+            "expected rate field in returned measurement",
+        ) as f64;
+        let state = m.get_field(&String::from("Report.pulseState"), &self.sc).expect(
+            "expected state field in returned measurement",
+        ) as u32;
+        Some((loss, rtt, rate, state))
+    }
+
+    fn get_probe_minrtt(&mut self, m: &Report) -> u32 {
+       m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
+            "expected minrtt field in returned measurement",
+        ) as u32
+    }
+}
+
+impl<T: Ipc> CongAlg<T> for BbrConfig {
+    type Flow = Bbr<T>;
+
+    fn name() -> &'static str {
+        "bbr"
+    }
+
+    fn datapath_programs(&self) -> FnvHashMap<&'static str, String> {
+        vec![
+            ("init_program", String::from("
+                (def
+                    (Report 
+                        (volatile loss 0)
+                        (minrtt +infinity)
+                        (volatile rate 0) 
+                        (pulseState 0)
+                    )
+                )
+                (when true
+                    (:= Report.loss (+ Report.loss Ack.lost_pkts_sample))
+                    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
+                    (:= Report.rate (max Report.rate (min Flow.rate_outgoing Flow.rate_incoming)))
+                    (:= Report.pulseState 5)
+                    (fallthrough)
+                )
+                (when (> Micros Report.minrtt)
+                    (report)
+                )
+            ")),
+            ("probe_rtt", String::from("
+                (def
+                    (Report (volatile minrtt +infinity))
+                )
+                (when true
+                    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
+                    (fallthrough)
+                )
+                (when (&& (> Micros 200000) (|| (< Flow.packets_in_flight 4) (== Flow.packets_in_flight 4)))
+                    (report)
+                )
+            ")),
+            ("probe_bw", String::from("
                 (def
                     (Report 
                         (volatile loss 0)
@@ -197,83 +238,34 @@ impl<T: Ipc> Bbr<T> {
                     (:= Micros 0)
                     (report)
                 )
-            "; 
-        self.control_channel.install(program, Some(&[("Report.minrtt", min_rtt),
-                                                     ("cwndCap", cwnd_cap),
-                                                     ("bottleRate", rate),
-                                                     ("threeFourthsRate", three_fourths_rate),
-                                                     ("fiveFourthsRate", five_fourths_rate)][..])).unwrap()
-    }
-
-    fn get_probe_bw_fields(&mut self, m: &Report) -> Option<(u32, u32, f64, u32)> {
-       let rtt = m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
-            "expected minrtt field in returned measurement",
-        ) as u32;
-        let loss = m.get_field(&String::from("Report.loss"), &self.sc).expect(
-            "expected loss field in returned measurement",
-        ) as u32;
-        let rate = m.get_field(&String::from("Report.rate"), &self.sc).expect(
-            "expected rate field in returned measurement",
-        ) as f64;
-        let state = m.get_field(&String::from("Report.pulseState"), &self.sc).expect(
-            "expected state field in returned measurement",
-        ) as u32;
-        Some((loss, rtt, rate, state))
-    }
-
-    fn install_probe_rtt(&self) -> Scope {
-        self.install_update(&[("Cwnd", (4 * self.mss) as u32)]);
-        let program =
-            b"
-                (def
-                    (Report (volatile minrtt +infinity))
-                )
-                (when true
-                    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
-                    (fallthrough)
-                )
-                (when (&& (> Micros 200000) (|| (< Flow.packets_in_flight 4) (== Flow.packets_in_flight 4)))
-                    (report)
-                )
-            ";
-        self.control_channel.install(program, None).unwrap()
-    }
-
-    fn get_probe_minrtt(&mut self, m: &Report) -> u32 {
-       m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
-            "expected minrtt field in returned measurement",
-        ) as u32
-    }
-
-}
-
-impl<T: Ipc> CongAlg<T> for Bbr<T> {
-    type Config = BbrConfig;
-
-    fn name() -> String {
-        String::from("bbr")
+	    ")),
+        ]
+        .into_iter()
+        .collect()
     }
     
-    fn create(control: Datapath<T>, cfg: Config<T, Bbr<T>>, info: DatapathInfo) -> Self {
-        let mut s = Self {
+    fn new_flow(&self, control: Datapath<T>, info: DatapathInfo) -> Self::Flow {
+        let mut s = Bbr {
             control_channel: control,
             sc: Scope::new(),
-            logger: cfg.logger,
-            probe_rtt_interval: cfg.config.probe_rtt_interval,
+            logger: self.logger.clone(),
+            probe_rtt_interval: self.probe_rtt_interval,
             bottle_rate: 125_000.0,
-            bottle_rate_timeout: time::now().to_timespec() + cfg.config.probe_rtt_interval,
+            bottle_rate_timeout: time::now().to_timespec() + self.probe_rtt_interval,
             min_rtt_us: 1_000_000,
-            min_rtt_timeout: time::now().to_timespec() + cfg.config.probe_rtt_interval,
+            min_rtt_timeout: time::now().to_timespec() + self.probe_rtt_interval,
             curr_mode: BbrMode::ProbeBw,
             mss: info.mss,
             init: true,
             start: time::now().to_timespec(),
         };
         
-        s.sc = s.install_init_program(info.init_cwnd);
+        s.sc = s.control_channel.set_program("init_program", Some(&[("Cwnd", info.init_cwnd)])).unwrap();
         s
     }
+}
 
+impl<T: Ipc> portus::Flow for Bbr<T> {
     fn on_report(&mut self, _sock_id: u32, m: Report) {
         // if report is not for the current scope, please return
         if self.sc.program_uid != m.program_uid {
@@ -319,11 +311,10 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                     self.min_rtt_us = minrtt;
                     self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
                     if !(self.init) { // probe bw program is installed
-                        self.install_update(&[
-                            ("cwndCap", 
-                                (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32,
-                            )
-                        ]); // reinstall cwnd cap value
+                        self.install_update(&[(
+                            "cwndCap", 
+                            (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32), // reinstall cwnd cap value
+                        ]); 
                     }
                 }
 
@@ -336,7 +327,8 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                             "bottle rate" => self.bottle_rate / 125_000.0,
                         );
                     });
-                    self.sc = self.install_probe_rtt();
+                    self.sc = self.control_channel.set_program("probe_rtt", None).unwrap();
+                    self.install_update(&[("Cwnd", (4 * self.mss) as u32)]);
                     return;
                 }
 
