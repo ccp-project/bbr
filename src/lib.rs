@@ -1,3 +1,46 @@
+//! Linux source: `net/ipv4/tcp_bbr.c`
+//!
+//! model of the network path:
+//! ```
+//!    bottleneck_bandwidth = windowed_max(delivered / elapsed, 10 round trips)
+//!    min_rtt = windowed_min(rtt, 10 seconds)
+//! ```
+//! ```
+//! pacing_rate = pacing_gain * bottleneck_bandwidth
+//! cwnd = max(cwnd_gain * bottleneck_bandwidth * min_rtt, 4)
+//! ```
+//!
+//! A BBR flow starts in STARTUP, and ramps up its sending rate quickly.
+//! When it estimates the pipe is full, it enters DRAIN to drain the queue.
+//! In steady state a BBR flow only uses `PROBE_BW` and `PROBE_RTT`.
+//! A long-lived BBR flow spends the vast majority of its time remaining
+//! (repeatedly) in `PROBE_BW`, fully probing and utilizing the pipe's bandwidth
+//! in a fair manner, with a small, bounded queue. *If* a flow has been
+//! continuously sending for the entire `min_rtt` window, and hasn't seen an RTT
+//! sample that matches or decreases its `min_rtt` estimate for 10 seconds, then
+//! it briefly enters `PROBE_RTT` to cut inflight to a minimum value to re-probe
+//! the path's two-way propagation delay (`min_rtt`). When exiting `PROBE_RTT`, if
+//! we estimated that we reached the full bw of the pipe then we enter `PROBE_BW`;
+//! otherwise we enter STARTUP to try to fill the pipe.
+//!
+//! The goal of `PROBE_RTT` mode is to have BBR flows cooperatively and
+//! periodically drain the bottleneck queue, to converge to measure the true
+//! `min_rtt` (unloaded propagation delay). This allows the flows to keep queues
+//! small (reducing queuing delay and packet loss) and achieve fairness among
+//! BBR flows.
+//!
+//! The `min_rtt` filter window is 10 seconds. When the `min_rtt` estimate expires,
+//! we enter `PROBE_RTT` mode and cap the cwnd at `bbr_cwnd_min_target=4` packets.
+//! After at least `bbr_probe_rtt_mode_ms=200ms` and at least one packet-timed
+//! round trip elapsed with that flight size <= 4, we leave `PROBE_RTT` mode and
+//! re-enter the previous mode. BBR uses 200ms to approximately bound the
+//! performance penalty of `PROBE_RTT`'s cwnd capping to roughly 2% (200ms/10s).
+//!
+//! Portus note:
+//! This implementation does `PROBE_BW` and `PROBE_RTT`, but leaves as future work
+//! an implementation of the finer points of other BBR implementations
+//! (e.g. policing detection).
+
 #[macro_use]
 extern crate slog;
 extern crate time;
@@ -6,50 +49,7 @@ extern crate portus;
 use portus::{CongAlg, Config, Datapath, DatapathInfo, DatapathTrait, Report};
 use portus::ipc::Ipc;
 use portus::lang::Scope;
-use std::fmt;
 
-/// Linux source: `net/ipv4/tcp_bbr.c`
-///
-/// model of the network path:
-/// ```
-///    bottleneck_bandwidth = windowed_max(delivered / elapsed, 10 round trips)
-///    min_rtt = windowed_min(rtt, 10 seconds)
-/// ```
-/// ```
-/// pacing_rate = pacing_gain * bottleneck_bandwidth
-/// cwnd = max(cwnd_gain * bottleneck_bandwidth * min_rtt, 4)
-/// ```
-///
-/// A BBR flow starts in STARTUP, and ramps up its sending rate quickly.
-/// When it estimates the pipe is full, it enters DRAIN to drain the queue.
-/// In steady state a BBR flow only uses `PROBE_BW` and `PROBE_RTT`.
-/// A long-lived BBR flow spends the vast majority of its time remaining
-/// (repeatedly) in `PROBE_BW`, fully probing and utilizing the pipe's bandwidth
-/// in a fair manner, with a small, bounded queue. *If* a flow has been
-/// continuously sending for the entire `min_rtt` window, and hasn't seen an RTT
-/// sample that matches or decreases its `min_rtt` estimate for 10 seconds, then
-/// it briefly enters `PROBE_RTT` to cut inflight to a minimum value to re-probe
-/// the path's two-way propagation delay (`min_rtt`). When exiting `PROBE_RTT`, if
-/// we estimated that we reached the full bw of the pipe then we enter `PROBE_BW`;
-/// otherwise we enter STARTUP to try to fill the pipe.
-///
-/// The goal of `PROBE_RTT` mode is to have BBR flows cooperatively and
-/// periodically drain the bottleneck queue, to converge to measure the true
-/// `min_rtt` (unloaded propagation delay). This allows the flows to keep queues
-/// small (reducing queuing delay and packet loss) and achieve fairness among
-/// BBR flows.
-///
-/// The `min_rtt` filter window is 10 seconds. When the `min_rtt` estimate expires,
-/// we enter `PROBE_RTT` mode and cap the cwnd at `bbr_cwnd_min_target=4` packets.
-/// After at least `bbr_probe_rtt_mode_ms=200ms` and at least one packet-timed
-/// round trip elapsed with that flight size <= 4, we leave `PROBE_RTT` mode and
-/// re-enter the previous mode. BBR uses 200ms to approximately bound the
-/// performance penalty of `PROBE_RTT`'s cwnd capping to roughly 2% (200ms/10s).
-///
-/// Portus note:
-/// This implementation does `PROBE_BW` and `PROBE_RTT`, but leaves as future work
-/// an implementation of the finer points of other BBR implementations
-/// (e.g. policing detection).
 pub struct Bbr<T: Ipc> {
     control_channel: Datapath<T>,
     logger: Option<slog::Logger>,
@@ -281,9 +281,8 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
         }
         match self.curr_mode {
             BbrMode::ProbeRtt => {
-				let elapsed2 =  time::now().to_timespec() - self.start;
                 self.min_rtt_us = self.get_probe_minrtt(&m);
-				self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
+                self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
 
                 self.sc = self.install_probe_bw();
                 self.curr_mode = BbrMode::ProbeBw;
@@ -300,24 +299,31 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                     return;
                 }
 
-                let (loss, minrtt, rate, state) = fields.unwrap();
+                let (_loss, minrtt, rate, _state) = fields.unwrap();
                 let mut elapsed =  time::now().to_timespec() - self.start;
                 self.logger.as_ref().map(|log| {
                     debug!(log, "probe_bw";
-						"elapsed" => format!("{:?}.{:?}", elapsed.num_seconds(), elapsed.num_milliseconds() - elapsed.num_seconds()*1000),
+                        "elapsed" => format!("{:?}.{:?}", 
+                            elapsed.num_seconds(), 
+                            elapsed.num_milliseconds() - elapsed.num_seconds() * 1000,
+                        ),
                         "rate (Mbps)" => rate / 125_000.0,
                         "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
                     );
                 });
-				elapsed = time::now().to_timespec() - self.start;
+
                 // reset probe rtt counter and update cwnd cap
                 if minrtt < self.min_rtt_us {
-                    // datapath automatically  uses minrtt for when condition (non volatile), 
+                    // datapath automatically uses minrtt for when condition (non volatile), 
                     // this isn't reset, so no need to install again
                     self.min_rtt_us = minrtt;
                     self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
                     if !(self.init) { // probe bw program is installed
-                        self.install_update(&[("cwndCap", (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32)]); // reinstall cwnd cap value
+                        self.install_update(&[
+                            ("cwndCap", 
+                                (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32,
+                            )
+                        ]); // reinstall cwnd cap value
                     }
                 }
 
@@ -326,8 +332,8 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                     self.min_rtt_us = 0x3fff_ffff;
                     self.logger.as_ref().map(|log| {
                         info!(log, "switching to PROBE_RTT";
-                              "min_rtt (us)" => self.min_rtt_us,
-                              "bottle rate" => self.bottle_rate / 125_000.0,
+                            "min_rtt (us)" => self.min_rtt_us,
+                            "bottle rate" => self.bottle_rate / 125_000.0,
                         );
                     });
                     self.sc = self.install_probe_rtt();
@@ -352,8 +358,6 @@ impl<T: Ipc> CongAlg<T> for Bbr<T> {
                     self.sc = self.install_probe_bw();
                     self.init = false;
                 }
-
-				elapsed =  time::now().to_timespec() - self.start;
             }
         }
     }
