@@ -43,13 +43,13 @@
 
 #[macro_use]
 extern crate slog;
-extern crate time;
 extern crate fnv;
 extern crate portus;
+extern crate time;
 
-use portus::{CongAlg, Datapath, DatapathInfo, DatapathTrait, Report};
 use portus::ipc::Ipc;
 use portus::lang::Scope;
+use portus::{CongAlg, Datapath, DatapathInfo, DatapathTrait, Report};
 
 use fnv::FnvHashMap;
 
@@ -98,8 +98,13 @@ impl<T: Ipc> Bbr<T> {
         let three_fourths_rate = (self.bottle_rate * 0.75) as u32;
         let rate = self.bottle_rate as u32;
         let five_fourths_rate = (self.bottle_rate * 1.25) as u32;
-        let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32;
-        self.install_update(&[("bottleRate", rate), ("threeFourthsRate", three_fourths_rate), ("fiveFourthsRate", five_fourths_rate), ("cwndCap", cwnd_cap)]);
+        let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us) / 1e6) as u32;
+        self.install_update(&[
+            ("bottleRate", rate),
+            ("threeFourthsRate", three_fourths_rate),
+            ("fiveFourthsRate", five_fourths_rate),
+            ("cwndCap", cwnd_cap),
+        ]);
         self.logger.as_ref().map(|log| {
             info!(log, "PROBE_BW: updating rate";
                 "cwnd" => cwnd_cap,
@@ -116,8 +121,8 @@ impl<T: Ipc> Bbr<T> {
         let three_fourths_rate = (self.bottle_rate * 0.75) as u32;
         let rate = self.bottle_rate as u32;
         let five_fourths_rate = (self.bottle_rate * 1.25) as u32;
-        let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32;
-        
+        let cwnd_cap = (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us) / 1e6) as u32;
+
         self.logger.as_ref().map(|log| {
             info!(log, "switching to PROBE_BW";
                 "cwnd" => cwnd_cap,
@@ -129,33 +134,38 @@ impl<T: Ipc> Bbr<T> {
         });
 
         self.install_update(&[("Cwnd", cwnd_cap), ("Rate", five_fourths_rate)]);
-        self.control_channel.set_program("probe_bw", Some(&[("Report.minrtt", min_rtt),
-                                                     ("cwndCap", cwnd_cap),
-                                                     ("bottleRate", rate),
-                                                     ("threeFourthsRate", three_fourths_rate),
-                                                     ("fiveFourthsRate", five_fourths_rate)][..])).unwrap()
+        self.control_channel
+            .set_program(
+                "probe_bw",
+                Some(&[
+                    ("cwndCap", cwnd_cap),
+                    ("bottleRate", rate),
+                    ("threeFourthsRate", three_fourths_rate),
+                    ("fiveFourthsRate", five_fourths_rate),
+                ]),
+            )
+            .unwrap()
     }
 
     fn get_probe_bw_fields(&mut self, m: &Report) -> Option<(u32, u32, f64, u32)> {
-       let rtt = m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
-            "expected minrtt field in returned measurement",
-        ) as u32;
-        let loss = m.get_field(&String::from("Report.loss"), &self.sc).expect(
-            "expected loss field in returned measurement",
-        ) as u32;
-        let rate = m.get_field(&String::from("Report.rate"), &self.sc).expect(
-            "expected rate field in returned measurement",
-        ) as f64;
-        let state = m.get_field(&String::from("Report.pulseState"), &self.sc).expect(
-            "expected state field in returned measurement",
-        ) as u32;
+        let rtt = m
+            .get_field(&String::from("Report.minrtt"), &self.sc)
+            .expect("expected minrtt field in returned measurement") as u32;
+        let loss = m
+            .get_field(&String::from("Report.loss"), &self.sc)
+            .expect("expected loss field in returned measurement") as u32;
+        let rate = m
+            .get_field(&String::from("Report.rate"), &self.sc)
+            .expect("expected rate field in returned measurement") as f64;
+        let state = m
+            .get_field(&String::from("Report.pulseState"), &self.sc)
+            .expect("expected state field in returned measurement") as u32;
         Some((loss, rtt, rate, state))
     }
 
     fn get_probe_minrtt(&mut self, m: &Report) -> u32 {
-       m.get_field(&String::from("Report.minrtt"), &self.sc).expect(
-            "expected minrtt field in returned measurement",
-        ) as u32
+        m.get_field("Report.minrtt", &self.sc)
+            .expect("expected minrtt field in returned measurement") as u32
     }
 }
 
@@ -243,7 +253,7 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
         .into_iter()
         .collect()
     }
-    
+
     fn new_flow(&self, control: Datapath<T>, info: DatapathInfo) -> Self::Flow {
         let mut s = Bbr {
             control_channel: control,
@@ -259,8 +269,11 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
             init: true,
             start: time::now().to_timespec(),
         };
-        
-        s.sc = s.control_channel.set_program("init_program", Some(&[("Cwnd", info.init_cwnd)])).unwrap();
+
+        s.sc = s
+            .control_channel
+            .set_program("init_program", Some(&[("Cwnd", info.init_cwnd)]))
+            .unwrap();
         s
     }
 }
@@ -269,7 +282,7 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
     fn on_report(&mut self, _sock_id: u32, m: Report) {
         // if report is not for the current scope, please return
         if self.sc.program_uid != m.program_uid {
-            return
+            return;
         }
         match self.curr_mode {
             BbrMode::ProbeRtt => {
@@ -278,9 +291,9 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
 
                 self.sc = self.install_probe_bw();
                 self.curr_mode = BbrMode::ProbeBw;
-                
+
                 self.logger.as_ref().map(|log| {
-                    debug!(log, "PROBE_RTT";
+                    info!(log, "PROBE_RTT";
                         "min_rtt (us)" => self.min_rtt_us,
                     );
                 });
@@ -292,13 +305,10 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
                 }
 
                 let (_loss, minrtt, rate, _state) = fields.unwrap();
-                let mut elapsed =  time::now().to_timespec() - self.start;
+                let mut elapsed = time::now().to_timespec() - self.start;
                 self.logger.as_ref().map(|log| {
-                    debug!(log, "probe_bw";
-                        "elapsed" => format!("{:?}.{:?}", 
-                            elapsed.num_seconds(), 
-                            elapsed.num_milliseconds() - elapsed.num_seconds() * 1000,
-                        ),
+                    info!(log, "probe_bw";
+                        "elapsed" => elapsed.num_milliseconds() as f64 / 1e3,
                         "rate (Mbps)" => rate / 125_000.0,
                         "bottle rate (Mbps)" => self.bottle_rate / 125_000.0,
                     );
@@ -306,27 +316,38 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
 
                 // reset probe rtt counter and update cwnd cap
                 if minrtt < self.min_rtt_us {
-                    // datapath automatically uses minrtt for when condition (non volatile), 
+                    // datapath automatically uses minrtt for when condition (non volatile),
                     // this isn't reset, so no need to install again
                     self.min_rtt_us = minrtt;
                     self.min_rtt_timeout = time::now().to_timespec() + self.probe_rtt_interval;
-                    if !(self.init) { // probe bw program is installed
-                        self.install_update(&[(
-                            "cwndCap", 
-                            (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us)/1e6) as u32), // reinstall cwnd cap value
-                        ]); 
+                    self.logger.as_ref().map(|log| {
+                        info!(log, "new min_rtt";
+                            "min_rtt (us)" => self.min_rtt_us,
+                            "bottle rate" => self.bottle_rate / 125_000.0,
+                        );
+                    });
+
+                    if !(self.init) {
+                        // probe bw program is installed
+                        self.install_update(&[
+                            (
+                                "cwndCap",
+                                (self.bottle_rate * 2.0 * f64::from(self.min_rtt_us) / 1e6) as u32,
+                            ), // reinstall cwnd cap value
+                        ]);
                     }
                 }
 
                 if time::now().to_timespec() > self.min_rtt_timeout {
                     self.curr_mode = BbrMode::ProbeRtt;
-                    self.min_rtt_us = 0x3fff_ffff;
                     self.logger.as_ref().map(|log| {
                         info!(log, "switching to PROBE_RTT";
                             "min_rtt (us)" => self.min_rtt_us,
                             "bottle rate" => self.bottle_rate / 125_000.0,
                         );
                     });
+
+                    self.min_rtt_us = 0x3fff_ffff;
                     self.sc = self.control_channel.set_program("probe_rtt", None).unwrap();
                     self.install_update(&[("Cwnd", (4 * self.mss) as u32)]);
                     return;
@@ -344,8 +365,7 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
 
                 if self.init {
                     self.logger.as_ref().map(|log| {
-                        info!(log, "new_flow";
-                        );
+                        info!(log, "new_flow");
                     });
                     self.sc = self.install_probe_bw();
                     self.init = false;
