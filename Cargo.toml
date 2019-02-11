@@ -5,7 +5,7 @@ authors = ["Akshay Narayan <akshayn@mit.edu>"]
 
 [dependencies]
 clap="2.29"
-portus = { git = "https://github.com/ccp-project/portus.git" }
+portus = { path = "../portus" @ b40729d }
 slog = "2"
 slog-async = "2"
 slog-term = "2"
