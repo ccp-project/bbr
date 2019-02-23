@@ -56,7 +56,7 @@ fn main() {
         .map_err(|e| warn!(log, "bad argument"; "err" => ?e))
         .unwrap();
 
-    info!(log, "configured BBR"; 
+    info!(log, "configured BBR";
         "ipc" => ipc.clone(),
         "probe_rtt_interval" => ?cfg.probe_rtt_interval,
     );
