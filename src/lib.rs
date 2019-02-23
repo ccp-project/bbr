@@ -45,13 +45,15 @@
 extern crate slog;
 extern crate fnv;
 extern crate portus;
+extern crate portus_export;
 extern crate time;
+extern crate clap;
 
 use portus::ipc::Ipc;
 use portus::lang::Scope;
-use portus::{CongAlg, Datapath, DatapathInfo, DatapathTrait, Report};
+use portus::{CongAlg, ForCLI, Datapath, DatapathInfo, DatapathTrait, Report};
 
-use fnv::FnvHashMap;
+use std::collections::HashMap;
 
 pub struct Bbr<T: Ipc> {
     control_channel: Datapath<T>,
@@ -75,6 +77,9 @@ enum BbrMode {
 
 pub const PROBE_RTT_INTERVAL_SECONDS: i64 = 10;
 
+use portus_export::for_cli;
+
+#[for_cli]
 #[derive(Clone)]
 pub struct BbrConfig {
     pub logger: Option<slog::Logger>,
@@ -169,6 +174,48 @@ impl<T: Ipc> Bbr<T> {
     }
 }
 
+use clap::Arg;
+impl<'a,'b> ForCLI<'a,'b> for BbrConfig {
+    fn register() -> (String, clap::App<'a,'b>) {
+        let app = clap::App::new("CCP BBR")
+            .version("0.2.1")
+            .author("CCP Project <ccp@csail.mit.edu>")
+            .about("Implementation of BBR Congestion Control")
+            .arg(Arg::with_name("probe_rtt_interval")
+                 .long("probe_rtt_interval")
+                 .help("Sets the BBR probe RTT interval in seconds, after which BBR drops its congestion window to potentially observe a new minimum RTT.")
+                 .default_value("10"))
+            .arg(Arg::with_name("verbose")
+                 .short("v")
+                 .help("If provided, log internal BBR state"));
+        (String::from("bbr"), app)
+    }
+    fn from_args(args: &clap::ArgMatches, logger: Option<slog::Logger>) -> Result<Self, portus::Error> {
+        /*
+        let probe_rtt_interval_arg = time::Duration::seconds(
+            i64::from_str_radix(args.value_of("probe_rtt_interval").unwrap(), 10)
+                .map_err(|e| format!("{:?}", e))
+                .and_then(|probe_rtt_interval_arg| {
+                    if probe_rtt_interval_arg <= 0 {
+                        Err(format!(
+                            "probe_rtt_interval must be positive: {}",
+                            probe_rtt_interval_arg
+                        ))
+                    } else {
+                        Ok(probe_rtt_interval_arg)
+                    }
+                })?,
+        );
+        */
+        Ok(
+            Self {
+                logger: logger, 
+                probe_rtt_interval: time::Duration::seconds(10)
+            }
+        )
+    }
+}
+
 impl<T: Ipc> CongAlg<T> for BbrConfig {
     type Flow = Bbr<T>;
 
@@ -176,7 +223,7 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
         "bbr"
     }
 
-    fn datapath_programs(&self) -> FnvHashMap<&'static str, String> {
+    fn datapath_programs(&self) -> HashMap<&'static str, String> {
         vec![
             ("init_program", String::from("
                 (def
