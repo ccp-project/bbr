@@ -51,7 +51,7 @@ extern crate clap;
 
 use portus::ipc::Ipc;
 use portus::lang::Scope;
-use portus::{CongAlg, ForCLI, Datapath, DatapathInfo, DatapathTrait, Report};
+use portus::{CongAlg, CongAlgBuilder, Datapath, DatapathInfo, DatapathTrait, Report};
 
 use std::collections::HashMap;
 
@@ -77,9 +77,7 @@ enum BbrMode {
 
 pub const PROBE_RTT_INTERVAL_SECONDS: i64 = 10;
 
-use portus_export::for_cli;
-
-#[for_cli]
+#[portus_export::register_ccp_alg]
 #[derive(Clone)]
 pub struct BbrConfig {
     pub logger: Option<slog::Logger>,
@@ -175,9 +173,9 @@ impl<T: Ipc> Bbr<T> {
 }
 
 use clap::Arg;
-impl<'a,'b> ForCLI<'a,'b> for BbrConfig {
-    fn register() -> (String, clap::App<'a,'b>) {
-        let app = clap::App::new("CCP BBR")
+impl<'a,'b> CongAlgBuilder<'a,'b> for BbrConfig {
+    fn args() -> clap::App<'a,'b> {
+        clap::App::new("CCP BBR")
             .version("0.2.1")
             .author("CCP Project <ccp@csail.mit.edu>")
             .about("Implementation of BBR Congestion Control")
@@ -187,12 +185,10 @@ impl<'a,'b> ForCLI<'a,'b> for BbrConfig {
                  .default_value("10"))
             .arg(Arg::with_name("verbose")
                  .short("v")
-                 .help("If provided, log internal BBR state"));
-        (String::from("bbr"), app)
+                 .help("If provided, log internal BBR state"))
     }
-    fn from_args(args: &clap::ArgMatches, logger: Option<slog::Logger>) -> Result<Self, portus::Error> {
-        /*
-        let probe_rtt_interval_arg = time::Duration::seconds(
+    fn with_arg_matches(args: &clap::ArgMatches, logger: Option<slog::Logger>) -> Result<Self, portus::Error> {
+        let probe_rtt_interval = time::Duration::seconds(
             i64::from_str_radix(args.value_of("probe_rtt_interval").unwrap(), 10)
                 .map_err(|e| format!("{:?}", e))
                 .and_then(|probe_rtt_interval_arg| {
@@ -204,13 +200,12 @@ impl<'a,'b> ForCLI<'a,'b> for BbrConfig {
                     } else {
                         Ok(probe_rtt_interval_arg)
                     }
-                })?,
+                }).map_err(|e| portus::Error(e))?,
         );
-        */
         Ok(
             Self {
                 logger: logger, 
-                probe_rtt_interval: time::Duration::seconds(10)
+                probe_rtt_interval 
             }
         )
     }
