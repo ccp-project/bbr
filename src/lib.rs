@@ -241,16 +241,23 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
                 )
             ")),
             ("probe_rtt", String::from("
-                (def
-                    (Report (volatile minrtt +infinity))
-                )
-                (when true
-                    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
-                    (fallthrough)
-                )
-                (when (&& (> Micros 200000) (|| (< Flow.packets_in_flight 4) (== Flow.packets_in_flight 4)))
-                    (report)
-                )
+		(def 
+		    (Report (volatile minrtt +infinity))
+		    (target_inflight_reached false)
+		)
+		(when true
+		    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
+		    (fallthrough)
+		)
+		(when (&& (== target_inflight_reached false)
+			  (|| (< Flow.packets_in_flight 4) (== Flow.packets_in_flight 4)))
+		    (:= target_inflight_reached true)
+		    (:= Micros 0)
+		)
+		(when (&& (== target_inflight_reached true) 
+		          (&& (> Micros Flow.rtt_sample_us) (> Micros 200000))
+		    (report)
+		)
             ")),
             ("probe_bw", String::from("
                 (def
