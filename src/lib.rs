@@ -220,7 +220,10 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
 
     fn datapath_programs(&self) -> HashMap<&'static str, String> {
         vec![
-            ("init_program", String::from("
+            (
+                "init_program",
+                String::from(
+                    "
                 (def
                     (Report 
                         (volatile loss 0)
@@ -239,27 +242,38 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
                 (when (> Micros Report.minrtt)
                     (report)
                 )
-            ")),
-            ("probe_rtt", String::from("
+            ",
+                ),
+            ),
+            (
+                "probe_rtt",
+                String::from(
+                    "
 		(def 
 		    (Report (volatile minrtt +infinity))
-		    (target_inflight_reached false)
+		    (volatile target_inflight_reached 0)
 		)
 		(when true
 		    (:= Report.minrtt (min Report.minrtt Flow.rtt_sample_us))
 		    (fallthrough)
 		)
-		(when (&& (== target_inflight_reached false)
+		(when (&& (== target_inflight_reached 0)
 			  (|| (< Flow.packets_in_flight 4) (== Flow.packets_in_flight 4)))
-		    (:= target_inflight_reached true)
+		    (:= target_inflight_reached 1)
 		    (:= Micros 0)
 		)
-		(when (&& (== target_inflight_reached true) 
+		(when (&& (== target_inflight_reached 1) 
 		          (&& (> Micros Flow.rtt_sample_us) (> Micros 200000))
+                    (:= Micros 0)
 		    (report)
 		)
-            ")),
-            ("probe_bw", String::from("
+            ",
+                ),
+            ),
+            (
+                "probe_bw",
+                String::from(
+                    "
                 (def
                     (Report 
                         (volatile loss 0)
@@ -297,7 +311,9 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
                     (:= Micros 0)
                     (report)
                 )
-	    ")),
+	    ",
+                ),
+            ),
         ]
         .into_iter()
         .collect()
