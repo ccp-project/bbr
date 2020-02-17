@@ -50,8 +50,7 @@ extern crate time;
 use portus::ipc::Ipc;
 use portus::lang::Scope;
 use portus::{CongAlg, Datapath, DatapathInfo, DatapathTrait, Report};
-
-use fnv::FnvHashMap;
+use std::collections::HashMap;
 
 pub struct Bbr<T: Ipc> {
     control_channel: Datapath<T>,
@@ -176,7 +175,7 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
         "bbr"
     }
 
-    fn datapath_programs(&self) -> FnvHashMap<&'static str, String> {
+    fn datapath_programs(&self) -> HashMap<&'static str, String> {
         vec![
             (
                 "init_program",
@@ -222,6 +221,7 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
 		)
 		(when (&& (== target_inflight_reached 1) 
 		          (&& (> Micros Flow.rtt_sample_us) (> Micros 200000))
+                      )
                     (:= Micros 0)
 		    (report)
 		)
@@ -328,7 +328,7 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
                 }
 
                 let (_loss, minrtt, rate, _state) = fields.unwrap();
-                let mut elapsed = time::now().to_timespec() - self.start;
+                let elapsed = time::now().to_timespec() - self.start;
                 self.logger.as_ref().map(|log| {
                     info!(log, "probe_bw";
                         "elapsed" => elapsed.num_milliseconds() as f64 / 1e3,
