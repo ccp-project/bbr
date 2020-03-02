@@ -357,7 +357,7 @@ impl<T: Ipc> portus::Flow for Bbr<T> {
                 self.curr_mode = BbrMode::ProbeBw;
 
                 self.logger.as_ref().map(|log| {
-                    info!(log, "PROBE_RTT";
+                    info!(log, "probe_rtt";
                         "min_rtt (us)" => self.min_rtt_us,
                     );
                 });

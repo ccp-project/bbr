@@ -62,4 +62,10 @@ fn main() {
     );
 
     portus::start!(ipc.as_str(), Some(log), cfg).unwrap()
+    
+    //match ipc.as_str() {
+    //    "unix" => portus::start!(ipc.as_str(), Some(log), cfg, portus::ipc::Blocking, 1).unwrap(),
+    //    "netlink" => portus::start!(ipc.as_str(), Some(log), cfg).unwrap(),
+    //    _ => unimplemented!()
+    //}
 }
