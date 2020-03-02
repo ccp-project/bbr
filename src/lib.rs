@@ -262,8 +262,8 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
 		    (:= Micros 0)
 		)
 		(when (&& (== target_inflight_reached 1) 
-		          (&& (> Micros Flow.rtt_sample_us) (> Micros 200000))
-                    (:= Micros 0)
+              (&& (> Micros Flow.rtt_sample_us) (> Micros 200000)))
+            (:= Micros 0)
 		    (report)
 		)
             ",
@@ -336,7 +336,7 @@ impl<T: Ipc> CongAlg<T> for BbrConfig {
 
         s.sc = s
             .control_channel
-            .set_program("init_program", Some(&[("Cwnd", info.init_cwnd)]))
+            .set_program("init_program", Some(&[("Cwnd", info.init_cwnd), ("Rate", 750_000)]))
             .unwrap();
         s
     }
