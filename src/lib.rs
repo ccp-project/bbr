@@ -43,7 +43,6 @@
 
 #[macro_use]
 extern crate slog;
-extern crate fnv;
 extern crate portus;
 extern crate portus_export;
 extern crate time;
