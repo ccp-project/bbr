@@ -44,7 +44,6 @@
 #[macro_use]
 extern crate slog;
 extern crate portus;
-extern crate portus_export;
 extern crate time;
 extern crate clap;
 
@@ -76,7 +75,7 @@ enum BbrMode {
 
 pub const PROBE_RTT_INTERVAL_SECONDS: i64 = 10;
 
-#[portus_export::register_ccp_alg]
+#[portus::register_ccp_alg]
 #[derive(Clone)]
 pub struct BbrConfig {
     pub logger: Option<slog::Logger>,

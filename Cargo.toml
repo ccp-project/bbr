@@ -5,8 +5,7 @@ authors = ["Akshay Narayan <akshayn@mit.edu>"]
 
 [dependencies]
 clap = "2.29"
-portus = { git = "https://github.com/ccp-project/portus", branch = "many_to_one" }
-portus_export = { git = "https://github.com/ccp-project/portus", branch = "many_to_one" }
+portus = "0.6.0"
 slog = "2.3"
 time = "0.1"
 
