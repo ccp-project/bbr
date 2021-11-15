@@ -1,15 +1,8 @@
-extern crate clap;
-use clap::Arg;
-extern crate time;
-#[macro_use]
-extern crate slog;
-
-extern crate ccp_bbr;
-extern crate portus;
-
 use ccp_bbr::BbrConfig;
+use clap::Arg;
+use tracing::{info, warn};
 
-fn make_args(log: slog::Logger) -> Result<(BbrConfig, String), String> {
+fn make_args() -> Result<(BbrConfig, String), String> {
     let probe_rtt_interval_default = format!("{}", ccp_bbr::PROBE_RTT_INTERVAL_SECONDS);
     let matches = clap::App::new("CCP BBR")
         .version("0.2.1")
@@ -26,8 +19,8 @@ fn make_args(log: slog::Logger) -> Result<(BbrConfig, String), String> {
              .default_value(&probe_rtt_interval_default))
         .get_matches();
 
-    let probe_rtt_interval_arg = time::Duration::seconds(
-        i64::from_str_radix(matches.value_of("probe_rtt_interval").unwrap(), 10)
+    let probe_rtt_interval_arg = std::time::Duration::from_secs(
+        u64::from_str_radix(matches.value_of("probe_rtt_interval").unwrap(), 10)
             .map_err(|e| format!("{:?}", e))
             .and_then(|probe_rtt_interval_arg| {
                 if probe_rtt_interval_arg <= 0 {
@@ -43,7 +36,6 @@ fn make_args(log: slog::Logger) -> Result<(BbrConfig, String), String> {
 
     Ok((
         BbrConfig {
-            logger: Some(log),
             probe_rtt_interval: probe_rtt_interval_arg,
         },
         String::from(matches.value_of("ipc").unwrap()),
@@ -51,15 +43,11 @@ fn make_args(log: slog::Logger) -> Result<(BbrConfig, String), String> {
 }
 
 fn main() {
-    let log = portus::algs::make_logger();
-    let (cfg, ipc) = make_args(log.clone())
-        .map_err(|e| warn!(log, "bad argument"; "err" => ?e))
+    tracing_subscriber::fmt::init();
+    let (cfg, ipc) = make_args()
+        .map_err(|e| warn!(err = ?e, "bad argument"))
         .unwrap();
 
-    info!(log, "configured BBR"; 
-        "ipc" => ipc.clone(),
-        "probe_rtt_interval" => ?cfg.probe_rtt_interval,
-    );
-
-    portus::start!(ipc.as_str(), Some(log), cfg).unwrap()
+    info!(?ipc, probe_rtt_interval = ?cfg.probe_rtt_interval, "configured BBR");
+    portus::start!(ipc.as_str(), cfg).unwrap()
 }
