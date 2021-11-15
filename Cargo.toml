@@ -2,6 +2,7 @@
 name = "ccp_bbr"
 version = "0.2.2"
 authors = ["Akshay Narayan <akshayn@mit.edu>"]
+edition = "2018"
 
 [dependencies]
 clap = "2.29"
