@@ -5,7 +5,7 @@ authors = ["Akshay Narayan <akshayn@mit.edu>"]
 edition = "2021"
 
 [dependencies]
-portus = "0.6"
-clap = "2.29"
+portus = "0.9"
+clap = "4"
 tracing = "0.1"
-tracing-subscriber = "0.2"
+tracing-subscriber = "0.3"
