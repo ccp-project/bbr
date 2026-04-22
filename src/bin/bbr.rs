@@ -12,6 +12,8 @@ fn make_args() -> Result<(BbrConfig, String), String> {
              .help("Sets the type of ipc to use: (netlink|unix)")
              .default_value("unix")
              .value_parser(|s: &str| portus::algs::ipc_valid(s.to_owned())))
+             // to make it work with new clap and portus versions:
+             //.value_parser(clap::builder::PossibleValuesParser::new(portus::algs::ipc_valid())))
         .arg(Arg::new("probe_rtt_interval")
              .long("probe_rtt_interval")
              .help("Sets the BBR probe RTT interval in seconds, after which BBR drops its congestion window to potentially observe a new minimum RTT."))
